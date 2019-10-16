@@ -1,7 +1,7 @@
 ---
-title: "Lexical Diversity of short stories in Spanish"
+title: "LD of short stories in Spanish-speaking authors"
 author: "Juan Felipe Castro Cárdenas"
-date: "10/15/2019"
+date: "10/16/2019"
 output: html_document
 ---
 
@@ -242,9 +242,12 @@ tales_frame$TTR <- names(texts) %>%
                    map(~strsplit(texts[[.]], "\\n| ")[[1]]) %>%
                    map(~str_replace_all(., ponctuation, "")) %>%
                    map_dbl(~length(unique(.))/length(.))  
+
+print(paste0("Correlation between the TTR and text length is: ", 
+             cor(tales_frame$TTR, tales_frame$Palabras)))
 ```
 
-We see that, according to this calculation, long stories present a feebler lexical diversity compared with shorter ones. This seems very doubtful and, indeed, this way to measure LD is not considered of much use by modern linguists : as the number of words sampled grows, they will almost forcefully become less diverse, since the dlexicon of any language is limited. In th computational linguistics a better indicator has been developed, the Measure of Textual Lexical Diversity (MTLD).
+We see that, according to this calculation, long stories present a feebler lexical diversity compared with shorter ones. This seems very doubtful and, indeed, this way to measure LD is not considered of much use by modern linguists : as the number of words sampled grows, they will almost forcefully become less diverse, since the lexicon of any language is limited. In th computational linguistics a better indicator has been developed, the Measure of Textual Lexical Diversity (MTLD).
 
 *<strong>Reference 1</strong>: See https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3813439/ for an examination of the different metrics which are used to assess the impact
 of aphasia on lexical diversity.
@@ -305,8 +308,8 @@ lexical_diversity.by_author <- tales_frame %>%
                                arrange(1/MTLD)
 ```
 
-Curiously enough José Ortega y Gasset, an usually difficult author, presents the lesser lexical diversity in this sample (which comes from a tale, and so not comparable to his large philosophical work). The one with the richest lexicon is Rogelio Sinán, a lesser known chilian author whose texts are notable for the constant use of epithets and variations on words.
-All values, in any case, are very high in comparison with the typical values of MTLD for an English, non-literary text, which according to Reference 2 is usually of much less than a hundred words (in one study with ordinary texts and spoken language, this average is actually as low as 25). This is to be expected, since literary texts are usually much richer in lexicon and since Spanish is a much more inflected language. 
+Curiously enough José Ortega y Gasset, an usually difficult author, presents the lesser lexical diversity in this sample (which comes from a tale, and so not comparable to his large philosophical work). The one with the richest lexicon would be Rogelio Sinán, a lesser known author and diplomatic from Panama. 
+All values, in any case, are very high in comparison with the typical values of MTLD for an English, non-literary text, which according to Reference 2 is usually of much less than a hundred words (in Reference 1 with spoken language, this average is actually as low as 25). This is to be expected, since literary texts are usually much richer in lexicon and since Spanish is a much more inflected language. 
 In most cases, MTLD must be influenced by the repetition of words like "de", "y", "con", "la", etc... which are naturally repeated a lot in Spanish for the sake of grammatical correctness. If we take out those words, we obtain a very different metric :
 
 ```{r MTLD.not_commonest, message = "hide"}
@@ -325,7 +328,7 @@ tales_frame$MTLD.not_commonest <- names(texts) %>%
   map_dbl(function(tale) {print(tale); MTLD.non_commonest(texts[[tale]])})  
 ```
 
-This value is much higher, but it is also much more related to longitude of text : that is, if we exclude the repetition of this 49 "commonest" words, it seems that the lexical diversity of a text would only increase in size, at least for these literary texts.
+This value is much higher, but it is also much more related to longitude of text : that is, if we exclude the repetition of this 49 "commonest" words, it seems that the lexical diversity of a text would very much increase in size, at least for these literary texts.
 
 ```{r cor_MTLD.nc_Pal}
 print(paste0("Correlación sin excluir palabras: ", cor(tales_frame$MTLD,
@@ -333,7 +336,7 @@ print(paste0("Correlación sin excluir palabras: ", cor(tales_frame$MTLD,
 print(paste0("Correlación sin las palabras más comunes: ", cor(tales_frame$MTLD.not_commonest, tales_frame$Palabras)))
 ```
 
-Thus, as expected, it seems all classical authors are wary of repetition. More interestingly, however, is to note that this correlation weakly grows when shorter texts are excluded, while the original MTLD decays rapidly :
+Clearly all classical authors are wary of repetition! More interesting, however, is to note that this correlation coefficient weakly grows when shorter texts are excluded, while the original MTLD decays rapidly :
 
 ```{r graphic_correlation}
 Palabras_vs_MTLD <- map_dbl(seq.int(100, 1000, 10), ~cor(filter(tales_frame, Palabras > .)$Palabras,
@@ -350,99 +353,9 @@ tibble(min_words = seq.int(100, 1000, 10), MTLD = Palabras_vs_MTLD, MTLD.nc = Pa
        y = "Correlación Métrica-Longitud")
 ```
 
-It is interesting to observe that, the longest the texts considered, the most uncorrelated MTLD becomes to length : this is ideal for the metric, since it can be said that it gives a fair point of comparison for the lexical diversity of medium-length texts (the mean of our text's lengths is 1006.5, as can be easily calculated doing quantile(tales_frame$Palabras)). Even considering all texts, including many mini-tales with TTR ~ 1.0 (almost all words are different), the correlation of only 0.2476 is considered low in the references.
-Now, the other metric considered is a very different story. Taking only these 49 simple words out, we are very much falling in the same error as before : we may see that in the scatterplot just below. These 49 words actually represent 45% of the whole sample, so we can understand their impact, but it would be interesting if we could find a metric which does not rely on their repetition (almost mandatory) to assess LD. For the moment, the correlation is actually very significant, but we could try to reduce it by augmenting the factor.size parameter. We compare the following two situations, and we want to pass from the first to the second (the MTLD presenting a low correlation with length).
-
-```{r MTLD.nc_vs_Palabras}
-lin_model.nc <- lm(tales_frame$MTLD.not_commonest ~ tales_frame$Palabras,
-                subset = which(tales_frame$Palabras<10000))
-coeffs.nc <- lin_model.nc$coefficients
-summary(lin_model.nc)
-
-tales_frame %>%
-  ggplot(aes(x = Palabras, y = MTLD.not_commonest)) +
-  geom_point() +
-  geom_line(aes(x = Palabras, y = coeffs.nc[[1]] + Palabras*coeffs.nc[[2]])) +
-  labs(title = "MTLD.nc según el número de palabras")
-
-lin_model <- lm(tales_frame$MTLD ~ tales_frame$Palabras,
-                subset = which(tales_frame$Palabras<10000))
-coeffs <- lin_model$coefficients
-summary(lin_model)
-
-tales_frame %>%
-  ggplot(aes(x = Palabras, y = MTLD)) +
-  geom_point() +
-  geom_line(aes(x = Palabras, y = coeffs[[1]] + Palabras*coeffs[[2]])) +
-  labs(title = "MTLD según el número de palabras")
-
-```
-
-Hence we see that, for what it seems to be a long interval of text word-count,
-the lexical diversity of a typical Spanish text only grows with length. The
-highly inflected nature of the language may contribute to this, of course. We
-could also try different values of the baseline of factor lexical diversity
-(here fixed at 0.72), to see whether another value produces a better indicator.
-This is what we do next :
-
-```{r MTLD.nc_factor_size_varies}
-# TTR with the commonest words excluded, as a point of comparison.
-tales_frame$TTR.nc <- names(texts) %>%
-  map(~strsplit(texts[[.]], "\\n| ")[[1]]) %>%
-  map(~str_replace_all(., ponctuation, "")) %>%
-  map(~.[which(!(. %in% commonest))]) %>%
-  map_dbl(~length(unique(.))/length(.))
-saveRDS(tales_frame, "Resources/tales_frame_with_nc.rds")
-
-
-# We exclude the longest texts, in order to have a reasonable speed.
-texts.not_longest <- texts[which(tales_frame$Palabras<10000)]
-
-MTLD.nc_apply <- function(val) {
-  
-  names(texts.not_longest) %>%
-  map_dbl(function(tale) {MTLD.non_commonest(texts.not_longest[[tale]], 
-                                             factor.size = val)})
-}
-
-MTLD.factor_size_varies <- tales_frame %>%
-                           filter(Palabras<10000) %>%
-                           select(Título, MTLD.not_commonest)
-
-for (val in seq(0.74, 0.99, length.out = 10)) {
-  
-  print(val)  
-  MTLD.factor_size_varies <- MTLD.factor_size_varies %>%
-                add_column(!!sym(paste0("MTLD.nc_", val)) := MTLD.nc_apply(val))
-}
-
-saveRDS(MTLD.factor_size_varies, "Resources/MTLD.factor_size_varies.rds")
-MTLD.factor_size_varies$Palabras <- tales_frame %>%
-                                    filter(Palabras<10000) %>%
-                                    select(Palabras)
-
-MTLD.factor_size_varies$MTLD <- tales_frame %>%
-                                filter(Palabras<10000) %>%
-                                select(MTLD)
-
-qplot(x = c(0.72, seq.int(0.74, 0.99, length.out = 10)), y = map_dbl(MTLD.factor_size_varies[, 2:12], ~sd(.)), 
-main = "Desviación estándar de MTLD.nc sobre el corpus (<10000 palabras)", 
-ylab = "Desviación estándar",
-xlab = "Parámetro factor.size")
-
-qplot(x = c(0.72, seq.int(0.74, 0.99, length.out = 10)), y = map_dbl(MTLD.factor_size_varies[2:12], ~cor(MTLD.factor_size_varies$MTLD,.)), 
-main = "Correlación de MTLD.nc a MTLD sobre el corpus (<10000 palabras))",
-ylab = "Coeficiente de Pearson",
-xlab = "Parámetro factor.size")
-
-qplot(x = c(0.72, seq.int(0.74, 0.99, length.out = 10)), y = map_dbl(MTLD.factor_size_varies[2:12], ~cor(MTLD.factor_size_varies$Palabras,.)),
-main = "Correlación de MTLD.nc al número de palabras sobre el corpus (<10000 plbs)",
-ylab = "Coeficiente de Pearson",
-xlab = "Parámetro factor.size")
-
-```
-
-Another approach consists in using the original rationale behind the choice of 0.72 as standard factor size : we may search for a value which allows for the <em>point of stabilization</em> to be reached without losing sensitivity. In order to do this, we could simply read sequentially our corpus, and try to find which is the value at which TTR stops changing significantly. For example, using one of our tales :
+We have then very much inverted the tendency of TTR : our metric is growing with the length of texts, and this could be considered reasonable for this register of language, where creativity and variation are important. Discarding the 49 commonest words, which actually represent 45% of all words present, we are far from exhausting the Spanish lexicon with our short stories, new words still appear frequently enough in fairly long stories.
+The positive correlation gets higher with shorter texts, where new words appear almost everywhere. If we only considered medium-length stories, of 200-1000 words, the correlation is still high, of about 0.55. In this case, we could say that the lexicon of classical authors is not running low when writing a 1000-word story, which sounds very reasonable. But we would like to motivate our choice of parameter, since as mentioned before this parameter was chosen for another language and to fit various registers of speech, while here we are centering on a single, literary register.
+To do this, our approach consists in using the original rationale behind the choice of 0.72 as standard factor size : we may search for a value which allows for the <em>point of stabilization</em> to be reached without losing sensitivity. In order to do this, we could simply read sequentially our corpus, and try to find which is the value at which TTR stops changing significantly. For example, using one of our tales :
 
 ```{r plot_sensitivity}
 
@@ -453,12 +366,12 @@ TTR_sequence <- map_dbl(1:length(text_split), ~length(unique(text_split[1:.]))/.
 qplot(x = 1:length(text_split), y = TTR_sequence, geom = "line", ylim = c(0,1))
 ```
 
-The idea then, would be as follows :
+We see that TTR first varies much, then its variation becomes very gradual until it just gradually decreases. At this point, we should consider LD has unfolded to its possibilities. The idea then, would be as follows :
 
 * We take 200-word fragment from our corpus (we consider this, from our previous use of MTLD, a more than sufficient margin for LD to deploy itself).
 * We read the text and calculate the TTR at each new word, as well as the change from
 the TTR level just before
-* We keep a window with the last 20 words, and we stop at the point were there has not been any jump of more than 0.05 in the TTR levels. 
+* We keep a window with the last 20 words, and we stop at the point were there has not been any jump of more than 0.005 in the TTR levels (this way, variation has stabilized at less than 0.005*20 = 0.1 at this point of text.) 
 * When we stop, we take the value of TTR as a value that corresponds to a point of stabilization : from this point onwards, the main tendency of TTR is a gradual descent, and we may consider that LD has fully deployed itself in the past fragment.
 
 We hope to obtain in this way a significant value for TTR to work as factor.size, according to the rationale exhibited in Reference 2 above. We also expect this to be a value greater than 0.72, of course, since we have seen that this value is relatively high and produces a MTLD correlated with length for shorter texts (though little correlated for longer texts.)
@@ -522,7 +435,7 @@ for (text in texts.not_longest) {
 
 ```
 
-This gives a value which should be a better indicator of LD for the texts we have observed, and for literary texts in Spanish in general. Which is the correlation of MTLD, using this parameter, with length?
+We have three values here, which represent different levels of stabilization we ask from our sequence.  Which is the correlation of MTLD, using this parameter, with length?
 
 ```{r MTLD.revisited}
 tales_frame$MTLD_0.88 <- tales_frame$MTLD <- names(texts) %>%
@@ -541,8 +454,8 @@ print(paste0("Correlación MTLD al número de palabras con parámetro 0.72: ", c
 saveRDS(tales_frame, "Resources/tales_frame_final.rds")
 ```
 
-We see that, as with the parameter MTLD before, both metrics exhibit a quite feeble positive correlation with the number of words in the text, and this correlation actually becomes negligeable when we consider long texts. For texts in the middle range of length, from 200 to 1000 words, the correlations are near the range 30-55%, meaning that lexical diversity still tends to grow with length : in any case, the short stories may well exhibit this behaviour to a certain point, since in literary language repetition tends to be avoided (except at very specific passages where it is intended to have an effect), and the lexical richness of classical authors hardly stays short of vocabulary.
-Following the rationale of the choice of the size of factors by the search of a point of stabilization, we will choose 0.76 as parameter : to choose it we said that a fragment has stabilized when TTR does not make jumps greater than 0.005 at each time, with allows for no more than 0.01 variation in the last 20 words, our stabilization window. The actual mean was 0.748, we choose to approximate to 0.76 to favour the creation of factors (see Ref. 2). Hence, this is for us the best parameter, and we can have an answer to the question : which authors are more lexically diverse?
+We see that, as with the parameter 0.72 before, this metric exhibits a positive correlation with the number of words in the text, though this correlation actually becomes negligeable when we consider long texts. For texts in the middle range of length, from 200 to 1000 words, the correlations are near the range 30-55%, meaning that lexical diversity still tends to grow with length : in any case, the short stories may well exhibit this behaviour to a certain point, since in literary language repetition tends to be avoided (except at very specific passages where it is intended to have an effect), and the lexical richness of classical authors hardly stays short of vocabulary.
+Following the rationale of the choice of the size of factors by the search of a point of stabilization, we will choose 0.76 as parameter : to choose it we said that a fragment has stabilized when TTR does not make jumps greater than 0.005 at each time, with allows for no more than 0.01 variation in the last 20 words, our stabilization window (and an average length for a sentence). The actual mean was 0.748, we choose to approximate to 0.76 to favour the creation of factors (see Ref. 2). Hence, this parameter can be better justified, so let us again answer the question : which authors are more lexically diverse?
 
 ```{r LD.by_author.revisited}
 
@@ -551,7 +464,9 @@ lexical_diversity.by_author.revisited <- tales_frame %>%
                                          group_by(Autor) %>%
                                          summarise_at(vars(MTLD_0.76), ~mean(.)) %>%
                                          arrange(1/MTLD_0.76)
+
+lexical_diversity.by_author.revisited
+plot(ecdf(lexical_diversity.by_author.revisited$MTLD_0.76))
 saveRDS(lexical_diversity.by_author.revisited, "Resources/lexical_diversity.by_author.revisited")
 ```
-
-
+Curiously enough, many of the highest-regarded classical authors, like Borges, Cortázar, Cervantes and García Márquez lie among the last ones, in the 110s. A rich vocabulary may not always be the mark of genius! This without excluding some great classical authors, like Rulfo, Garro, Paz, Carpentier and Quiroga who are more on the high side. It is interesting to see how this metric naturally arranges in a normal-like distribution (probably by the cumulated effect of averaging throughout our procedures.) But this, of cours, is not the definitive answer! There are still parameters to test, other metrics to explore and other aspects of language to take into account. For the time being, any of the authors in the low range would be a good (and rather accesible) start into Spanish !
