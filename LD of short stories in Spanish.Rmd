@@ -7,7 +7,6 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-knitr::opts_knit$set("C:/Users/juanf/OneDrive/Documentos/Code to be proud of ;)")
 ```
 
 ```{r imports, include = FALSE}
