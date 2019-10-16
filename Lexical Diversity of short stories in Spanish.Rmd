@@ -1,0 +1,557 @@
+---
+title: "Lexical Diversity of short stories in Spanish"
+author: "Juan Felipe Castro Cárdenas"
+date: "10/15/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set("C:/Users/juanf/OneDrive/Documentos/Code to be proud of ;)")
+```
+
+```{r imports, include = FALSE}
+library(tidyverse)
+library(rvest)
+library(xml2)
+library(RSelenium)
+library(stringr)
+library(koRpus)
+library(stringi)
+```
+
+<!---
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>. When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. 
+
+--->
+
+# Introduction
+
+The idea of this document is to compare the work of various Spanish-speaking authors to establish a computational value for the complexity of their texts. For the moment, the 
+only complexity criterion applied is Lexical Diversity (LD), a relatively simple criterion which is usually important for the choice of texts to be read by children and foreign learners of a language. Other more sophisticated features of a text (sentence structure, use of tenses and modes, ...) should be later incorporated.
+
+# Consitution of a corpus
+
+In order to compare a significant number of authors, we need to constitute a large corpus. For this analysis, we have retrieved texts by 138 Spanish-speaking authors from the website https://ciudadseva.com/biblioteca/indice-autor-cuentos/, which contains many stories written in or translated into Spanish, mainly by modern (born post-1800) authors. These texts are well transcribed, with a feeble proportion of errors, and represent all countries of Iberoamerica (though mainly Spain, Mexico and Argentina, which are by far the biggest contributors to the Spanish literary corpus). The website layout is simple enough that it
+allows for the utilization of basic webscraping techniques for the consultation and download from these pages. The code to recover the texts is shown in the next chunk; Docker is needed by RSelenium to deploy the selenium/standalone-firefox automatic navigator which performs the actual recovery of text.
+
+```{r corpus_constitution, eval = FALSE}
+# eval = FALSE since the execution of this chunk requires a significant amount of resources
+# from a home computer. The execution has already been done and results saved in the
+# Resources folder in the root directory.
+
+#' Setup and run our automated Firefox navigator.
+#' For more information, see vignette("docker", "RSelenium").
+shell("docker run -d -p 4445:4444 selenium/standalone-firefox")
+remDr <- remoteDriver(remoteServerAddr = "192.168.99.101", port = 4445L)
+remDr$open()
+remDr$navigate("https://ciudadseva.com/biblioteca/indice-autor-cuentos/")
+
+#' Recover author metadata
+#' (CSS selector recovered through ChroPath on Firefox)
+author_selector <- "body.page-template.page-template-template-index-authors.page-template-template-index-authors-php.page.page-id-46566.page-child.parent-pageid-3416.indice-autor-cuentos.sidebar-primary:nth-child(2) div.container-fluid:nth-child(11) div.col-sm-8.col-white:nth-child(2) div.row.xs-center:nth-child(7) div.col-sm-6"
+all_authors.webEls <- remDr$findElements("css selector", author_selector)
+all_authors.links <-  all_authors.webEls %>%
+                      map(~.$findChildElement("tag name", "a")$getElementAttribute("href")) %>%
+                      unlist()
+all_authors.names <-  all_authors.webEls %>%
+                      map(~str_match(.$getElementText(), "(.*): \n(.*): ([0-9]{4})-([0-9]{4})")) %>%
+                      reduce(rbind) %>%
+                      as_tibble() %>%
+                      select(-1) %>%
+                      rename("Autor" = 1, "País" = 2, "Nacimiento" = 3, "Defunción" = 4)
+all_authors.links <- all_authors.links[which(!is.na(all_authors.names$Autor))]
+all_authors.names <- all_authors.names %>%
+                     filter(!is.na(Autor))
+
+if (!dir.exists("Resources")){dir.create("Resources")}
+write_csv2(all_authors.names, "Resources/Todos los autores.csv")
+saveRDS(all_authors.links, "Resources/all_authors_links.rds")
+
+#' Identify only iberoamerican authors
+Iberoamerican_countries <- c("Colombia", "España", "México", "Perú",
+                             "Puerto Rico", "Argentina", "Cuba", "Guatemala",
+                             "Paraguay", "Chile", "Uruguay",
+                             "Venezuela", "República Dominicana", "Honduras", 
+                             "Nicaragua", "Costa Rica", "Bolivia", "El Salvador",
+                             "Ecuador", "Panamá")
+all_authors.names <- all_authors.names %>%
+                     mutate(País = str_replace_all(País, c("Española" = "España", 
+                                                           "Mexicana" = "México",
+                                                           "Argentino" = "Argentina",
+                                                           "Mexicano" = "México",
+                                                           "Puertorriqueño" = "Puerto Rico",
+                                                           "Boliviano" = "Bolivia")))
+sp_authors.links <- all_authors.links[which(all_authors.names$País %in% Iberoamerican_countries)]
+sp_authors.names <- all_authors.names %>%
+                    filter(País %in% Iberoamerican_countries)
+
+write_csv2(sp_authors.names, "Resources/Autores en español.csv")
+saveRDS(sp_authors.links, "Resources/sp_authors_links.rds")
+
+#' Now follow the links to recover each one's tales.
+#' Xpath retrieved thanks to ChroPath
+tales_xpath <- "/html[1]/body[1]/div[7]/div[2]/article[1]/div[1]/ul[1]"
+
+#' find_tales_links
+#' @description Internal function for retrieving the links to the stories
+#' @return Named list of links to the different tales by the author.
+find_tales_links <- function(author.link) {
+  
+  tryCatch({   
+  remDr$navigate(author.link)
+  cat(paste0("Visiting ", str_match(author.link, "autor/([a-z\\-]*)/cuentos/")[[2]], "\n"))
+  tales_elements <- remDr$findElement("xpath", tales_xpath)$findChildElements("tag name", "li")
+  tales_links <- tales_elements %>% 
+                 map(~.$findChildElement("tag name", "a")$getElementAttribute("href"))
+  tales_names <- tales_elements %>%
+                 map_chr(~unlist(.$getElementText()))
+  names(tales_links) <- tales_names
+  return(tales_links)
+  },
+  error = function(e) {print(e); return(NULL)})
+}
+
+#'#' This is a bit more concise, but more risky if the machine eventually fails,
+#'#' for the time needed to navigate all these websites is non-negligeable with 
+#'#' a home computer. 
+#' sp_authors.tales_links <- sp_authors.links %>%
+#'                           map(find_tales_links)
+
+sp_authors.tales_links <- list()
+for (author.link in sp_authors.links) {
+  sp_authors.tales_links <- c(sp_authors.tales_links, list(find_tales_links(author.link)))
+}
+names(sp_authors.tales_links) <- sp_authors.names$Autor
+saveRDS(sp_authors.tales_links, "Resources/sp_authors_tales_links.rds")
+
+
+sp_authors.names$Cuentos <- sp_authors.tales_links %>%
+                            map_chr(~paste0(names(.), collapse = ", "))
+
+write_csv2(sp_authors.names, "Resources/Autores en español y cuentos.csv")
+
+#' Having the links, we can finally recover the texts. This could be a heavier
+#' operation than retrieving the links.
+#' (The Xpath for the body of the text has been discovered through ChroPath.)
+text_path <- "/html[1]/body[1]/div[7]/div[2]/article[1]/div[1]"
+
+text_list <- list()
+remDr$open()
+for (author in names(sp_authors.tales_links)) {
+  
+  cat(paste0("Retrieving texts by ", author, "\n"))
+  author_texts <- c()
+  tryCatch({
+  for (tale_link in sp_authors.tales_links[[author]]){
+      remDr$navigate(tale_link[[1]])
+      tryCatch({tale <- remDr$findElement("xpath", text_path)$getElementText()},
+               error = function(e) {print(e); tale <- NA})
+      author_texts <- append(author_texts, tale)
+      names(author_texts) <- names(sp_authors.tales_links[[author]])
+  }}, error = function(e) {print(e); author_texts <- NULL})
+  text_list <- c(text_list, list(author_texts))  
+}
+rm(tale, author.link)
+rm(author)
+
+names(text_list) <- sp_authors.names$Autor[sp_authors.names$Cuentos != ""]
+saveRDS(text_list, "Resources/text_list.rds")
+```
+ 
+We list all tales recovered, since some of those available were not recovered due to technical problems at the time of the request (but the great majority were). Only the texts of Juan Manuel and Max Aub were omitted from the list, in the first case because layout differences invalidate the Xpath, and also because his Spanish is particularly archaic, and in the second because his double nationality was not recognized among the Iberoamerican countries. Some of the texts by Emilia Pardo Bazán, 275 in total, were not
+recovered; the 110 which were already present a significant corpus for a single author.
+
+```{r tales_frame.1}
+
+if (!exists("text_list")) {
+  text_list <- readRDS("Resources/text_list.rds")
+}
+
+tales_frame <- map(names(text_list), function(author) {
+                
+              #' Año : Year of writing appears sometimes as the last word of the document.
+              tibble(Título = names(text_list[[author]]),
+                     Autor  = author,  
+                     Año = stri_reverse(str_match(stri_reverse(unlist(text_list[[author]])),"([0-9]{4})")[, 2]))
+                }) %>%
+                bind_rows()
+
+
+```
+
+We now have a total of 1198 short stories to start analyzing the way these authors utilize the Spanish language. 
+
+# Corpus Analysis
+
+As a first information, we will see which are the most frequent words overall.
+
+```{r commonest_words}
+# We omit Spanish ponctuation and symbols, and numbers which may be collated to words.
+ponctuation <- "[\\-\\—\\‑\\…\\¡\\!\\_\\?\\¿\\,\\.\\:\\;\\'«»\\)\\(\\[\\]\\$|[:punct:]|[:digit:]|\\+\\=\\<\\>\\°]"
+
+word_splicing.by_author <- function(author){
+  cat(paste0(author, "\n"))
+  spl_text <- map(unlist(text_list[[author]]), ~strsplit(., "\\n| "))
+  spl_text <- c(unlist(spl_text))
+  return(spl_text)
+}
+
+sp_authors.all_spliced <- names(text_list) %>%
+                          map(word_splicing.by_author) %>%
+                          unlist() %>% 
+                          c()
+
+sp_authors.all_spliced <- str_replace_all(sp_authors.all_spliced, ponctuation, "")
+saveRDS(sp_authors.all_spliced, "Resources/sp_authors_all_spliced.rds")
+
+sp_authors.all_spliced.factor <- sp_authors.all_spliced %>%
+                                 tolower() %>%
+                                 factor()
+
+sort(table(sp_authors.all_spliced.factor), decreasing = T)[1:100]
+commonest <- names(sort(table(sp_authors.all_spliced.factor), decreasing = T)[1:49])
+
+print(paste0("Las 49 palabras más comunes representan ", 100*(sum(sort(table(sp_authors.all_spliced.factor), decreasing = T)[1:49])/sum(table(sp_authors.all_spliced.factor))), "% de la muestra."))
+
+```
+
+Surprisingly enough, "ojos" (eyes) is the most common substantive throughout
+this corpus! It is followed by "casa" (house, home), a word which would be
+much more credible as judging from the spoken language. 
+
+We can now compare the LD for these different authors. A couple of anotations, however :
+
+* The different inflected forms of substantives, adjectives and verbs are
+here counted as different words. In Spanish, each verb has many tens of conjugated forms in common use which would here be counted as different words. This could be a limitation, and I am looking for a dictionary in database form that would allow me to associate each inflected form to a parent form (I do not know if such a dictionary already exists in that format for Spanish). On the other hand, the use of many different tenses and modes for a verb reflects in itself some different kind of linguistical complexity to be studied.
+
+* Some ortographical errors are also to beware. On the site consulted, they tend to be really few. There are also ortographical variants that may be considered in a further comparison, by country for example, but since the authors are modern the general ortography of Spanish is common to them all. 
+
+Now, the most intuitive metric of LD is obtained by counting the proportion of distinct words in a text. This is actually called TTR (Type-Token Ratio) by linguists, and is readily computed.
+
+```{r naive_LD}
+texts <- unlist(map(text_list, unlist))
+saveRDS(texts, "Resources/texts.rds")
+
+tales_frame$Palabras <- names(texts) %>%
+  map_dbl(~length(strsplit(texts[[.]], "\\n| ")[[1]]))
+
+tales_frame$TTR <- names(texts) %>%
+                   map(~strsplit(texts[[.]], "\\n| ")[[1]]) %>%
+                   map(~str_replace_all(., ponctuation, "")) %>%
+                   map_dbl(~length(unique(.))/length(.))  
+```
+
+We see that, according to this calculation, long stories present a feebler lexical diversity compared with shorter ones. This seems very doubtful and, indeed, this way to measure LD is not considered of much use by modern linguists : as the number of words sampled grows, they will almost forcefully become less diverse, since the dlexicon of any language is limited. In th computational linguistics a better indicator has been developed, the Measure of Textual Lexical Diversity (MTLD).
+
+*<strong>Reference 1</strong>: See https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3813439/ for an examination of the different metrics which are used to assess the impact
+of aphasia on lexical diversity.
+
+*<strong>Reference 2</strong> : In https://link.springer.com/content/pdf/10.3758%2FBRM.42.2.381.pdf
+the creator of the MTLD metric explains the method and its rationale in detail.
+
+```{r MTLD, message="hide"}
+# Auxiliary function
+factor_counting <- function(word.sample, factor.size, reverse = F) {
+  total_length <- length(word.sample)
+  if (reverse) {word.sample <- rev(word.sample)}
+  factor_count <- 1
+  while (length(word.sample)>1) {
+    for (i in 1:length(word.sample)) {
+      TTR <- length(unique(word.sample[1:i]))/i
+      if (TTR<factor.size | i==length(word.sample)) {
+        partial_factor <- ifelse(TTR<factor.size, 1, (1-TTR)/(1-factor.size))
+        factor_count <- factor_count+partial_factor
+        word.sample <- word.sample[min(i+1, length(word.sample)):length(word.sample)]
+        break
+      }
+    }
+  }
+  return(total_length/factor_count)
+}
+
+# Actual metric calculation
+MTLD <- function(word.sample, factor.size = 0.72) {
+  word.sample <- str_replace_all(word.sample, ponctuation, "")
+  word.sample <- word.sample[!(word.sample %in% "")]
+  if (length(word.sample) == 1) {
+    word.sample <- strsplit(word.sample, "\\n| ")[[1]]
+    return(ifelse(length(word.sample)==1, 1, MTLD(word.sample, factor.size)))
+  }
+  else {
+    direct_value <- factor_counting(word.sample, factor.size)
+    reverse_value <- factor_counting(word.sample, factor.size, reverse = T)
+    return(mean(c(direct_value, reverse_value)))
+  }
+}
+
+tales_frame$MTLD <- names(texts) %>%
+                    map_dbl(function(tale) {print(tale); MTLD(texts[[tale]])})  
+```
+
+We can then answer a question difficult to answer otherwise : which classical
+spanish-speaking author has the greatest average linguistical diversity?
+
+<strong>N.B.</strong> We exclude the stories with less than a hundred words, which are not so well covered by the index or represent recovery mistakes (in the case of Borges's texts, we have sometimes only retrieved the citation at the introduction due to the formatting of the page being different).
+
+```{r LD.by_author}
+
+lexical_diversity.by_author <- tales_frame %>%
+                               filter(Palabras>100) %>%
+                               group_by(Autor) %>%
+                               summarise_at(vars(MTLD), ~mean(.)) %>%
+                               arrange(1/MTLD)
+```
+
+Curiously enough José Ortega y Gasset, an usually difficult author, presents the lesser lexical diversity in this sample (which comes from a tale, and so not comparable to his large philosophical work). The one with the richest lexicon is Rogelio Sinán, a lesser known chilian author whose texts are notable for the constant use of epithets and variations on words.
+All values, in any case, are very high in comparison with the typical values of MTLD for an English, non-literary text, which according to Reference 2 is usually of much less than a hundred words (in one study with ordinary texts and spoken language, this average is actually as low as 25). This is to be expected, since literary texts are usually much richer in lexicon and since Spanish is a much more inflected language. 
+In most cases, MTLD must be influenced by the repetition of words like "de", "y", "con", "la", etc... which are naturally repeated a lot in Spanish for the sake of grammatical correctness. If we take out those words, we obtain a very different metric :
+
+```{r MTLD.not_commonest, message = "hide"}
+MTLD.non_commonest <- function(word.sample, factor.size=0.72) {
+  if (length(word.sample) == 1) {
+    word.sample <- strsplit(word.sample, "[\\n ]", perl = T)[[1]]
+    return(ifelse(length(word.sample)==1, 1, MTLD.non_commonest(word.sample, factor.size)))
+  }
+  else {
+    word.sample <- word.sample[which(!(word.sample %in% commonest))]
+    MTLD(word.sample, factor.size)
+  }
+}
+           
+tales_frame$MTLD.not_commonest <- names(texts) %>%
+  map_dbl(function(tale) {print(tale); MTLD.non_commonest(texts[[tale]])})  
+```
+
+This value is much higher, but it is also much more related to longitude of text : that is, if we exclude the repetition of this 49 "commonest" words, it seems that the lexical diversity of a text would only increase in size, at least for these literary texts.
+
+```{r cor_MTLD.nc_Pal}
+print(paste0("Correlación sin excluir palabras: ", cor(tales_frame$MTLD,
+                                                         tales_frame$Palabras)))
+print(paste0("Correlación sin las palabras más comunes: ", cor(tales_frame$MTLD.not_commonest, tales_frame$Palabras)))
+```
+
+Thus, as expected, it seems all classical authors are wary of repetition. More interestingly, however, is to note that this correlation weakly grows when shorter texts are excluded, while the original MTLD decays rapidly :
+
+```{r graphic_correlation}
+Palabras_vs_MTLD <- map_dbl(seq.int(100, 1000, 10), ~cor(filter(tales_frame, Palabras > .)$Palabras,
+                                                         filter(tales_frame, Palabras > .)$MTLD))
+Palabras_vs_MTLD.nc <- map_dbl(seq.int(100, 1000, 10), ~cor(filter(tales_frame, Palabras > .)$Palabras,
+                                                         filter(tales_frame, Palabras > .)$MTLD.not_commonest))
+
+tibble(min_words = seq.int(100, 1000, 10), MTLD = Palabras_vs_MTLD, MTLD.nc = Palabras_vs_MTLD.nc) %>%
+  gather(key = "Métrica", value = "MTLDs", -min_words) %>%
+  ggplot(aes(x = min_words, y = MTLDs, color = Métrica)) +
+  geom_line() +
+  labs(title = "Tendencia de las métricas por tamaño de texto", 
+       x = "Número mínimo de palabras",
+       y = "Correlación Métrica-Longitud")
+```
+
+It is interesting to observe that, the longest the texts considered, the most uncorrelated MTLD becomes to length : this is ideal for the metric, since it can be said that it gives a fair point of comparison for the lexical diversity of medium-length texts (the mean of our text's lengths is 1006.5, as can be easily calculated doing quantile(tales_frame$Palabras)). Even considering all texts, including many mini-tales with TTR ~ 1.0 (almost all words are different), the correlation of only 0.2476 is considered low in the references.
+Now, the other metric considered is a very different story. Taking only these 49 simple words out, we are very much falling in the same error as before : we may see that in the scatterplot just below. These 49 words actually represent 45% of the whole sample, so we can understand their impact, but it would be interesting if we could find a metric which does not rely on their repetition (almost mandatory) to assess LD. For the moment, the correlation is actually very significant, but we could try to reduce it by augmenting the factor.size parameter. We compare the following two situations, and we want to pass from the first to the second (the MTLD presenting a low correlation with length).
+
+```{r MTLD.nc_vs_Palabras}
+lin_model.nc <- lm(tales_frame$MTLD.not_commonest ~ tales_frame$Palabras,
+                subset = which(tales_frame$Palabras<10000))
+coeffs.nc <- lin_model.nc$coefficients
+summary(lin_model.nc)
+
+tales_frame %>%
+  ggplot(aes(x = Palabras, y = MTLD.not_commonest)) +
+  geom_point() +
+  geom_line(aes(x = Palabras, y = coeffs.nc[[1]] + Palabras*coeffs.nc[[2]])) +
+  labs(title = "MTLD.nc según el número de palabras")
+
+lin_model <- lm(tales_frame$MTLD ~ tales_frame$Palabras,
+                subset = which(tales_frame$Palabras<10000))
+coeffs <- lin_model$coefficients
+summary(lin_model)
+
+tales_frame %>%
+  ggplot(aes(x = Palabras, y = MTLD)) +
+  geom_point() +
+  geom_line(aes(x = Palabras, y = coeffs[[1]] + Palabras*coeffs[[2]])) +
+  labs(title = "MTLD según el número de palabras")
+
+```
+
+Hence we see that, for what it seems to be a long interval of text word-count,
+the lexical diversity of a typical Spanish text only grows with length. The
+highly inflected nature of the language may contribute to this, of course. We
+could also try different values of the baseline of factor lexical diversity
+(here fixed at 0.72), to see whether another value produces a better indicator.
+This is what we do next :
+
+```{r MTLD.nc_factor_size_varies}
+# TTR with the commonest words excluded, as a point of comparison.
+tales_frame$TTR.nc <- names(texts) %>%
+  map(~strsplit(texts[[.]], "\\n| ")[[1]]) %>%
+  map(~str_replace_all(., ponctuation, "")) %>%
+  map(~.[which(!(. %in% commonest))]) %>%
+  map_dbl(~length(unique(.))/length(.))
+saveRDS(tales_frame, "Resources/tales_frame_with_nc.rds")
+
+
+# We exclude the longest texts, in order to have a reasonable speed.
+texts.not_longest <- texts[which(tales_frame$Palabras<10000)]
+
+MTLD.nc_apply <- function(val) {
+  
+  names(texts.not_longest) %>%
+  map_dbl(function(tale) {MTLD.non_commonest(texts.not_longest[[tale]], 
+                                             factor.size = val)})
+}
+
+MTLD.factor_size_varies <- tales_frame %>%
+                           filter(Palabras<10000) %>%
+                           select(Título, MTLD.not_commonest)
+
+for (val in seq(0.74, 0.99, length.out = 10)) {
+  
+  print(val)  
+  MTLD.factor_size_varies <- MTLD.factor_size_varies %>%
+                add_column(!!sym(paste0("MTLD.nc_", val)) := MTLD.nc_apply(val))
+}
+
+saveRDS(MTLD.factor_size_varies, "Resources/MTLD.factor_size_varies.rds")
+MTLD.factor_size_varies$Palabras <- tales_frame %>%
+                                    filter(Palabras<10000) %>%
+                                    select(Palabras)
+
+MTLD.factor_size_varies$MTLD <- tales_frame %>%
+                                filter(Palabras<10000) %>%
+                                select(MTLD)
+
+qplot(x = c(0.72, seq.int(0.74, 0.99, length.out = 10)), y = map_dbl(MTLD.factor_size_varies[, 2:12], ~sd(.)), 
+main = "Desviación estándar de MTLD.nc sobre el corpus (<10000 palabras)", 
+ylab = "Desviación estándar",
+xlab = "Parámetro factor.size")
+
+qplot(x = c(0.72, seq.int(0.74, 0.99, length.out = 10)), y = map_dbl(MTLD.factor_size_varies[2:12], ~cor(MTLD.factor_size_varies$MTLD,.)), 
+main = "Correlación de MTLD.nc a MTLD sobre el corpus (<10000 palabras))",
+ylab = "Coeficiente de Pearson",
+xlab = "Parámetro factor.size")
+
+qplot(x = c(0.72, seq.int(0.74, 0.99, length.out = 10)), y = map_dbl(MTLD.factor_size_varies[2:12], ~cor(MTLD.factor_size_varies$Palabras,.)),
+main = "Correlación de MTLD.nc al número de palabras sobre el corpus (<10000 plbs)",
+ylab = "Coeficiente de Pearson",
+xlab = "Parámetro factor.size")
+
+```
+
+Another approach consists in using the original rationale behind the choice of 0.72 as standard factor size : we may search for a value which allows for the <em>point of stabilization</em> to be reached without losing sensitivity. In order to do this, we could simply read sequentially our corpus, and try to find which is the value at which TTR stops changing significantly. For example, using one of our tales :
+
+```{r plot_sensitivity}
+
+text_split<-strsplit(str_replace_all(texts[[120]], ponctuation, ""), "\\n| ")[[1]]
+text_split <- text_split[which(!(text_split %in% commonest))]
+TTR_sequence <- map_dbl(1:length(text_split), ~length(unique(text_split[1:.]))/.)
+
+qplot(x = 1:length(text_split), y = TTR_sequence, geom = "line", ylim = c(0,1))
+```
+
+The idea then, would be as follows :
+
+* We take 200-word fragment from our corpus (we consider this, from our previous use of MTLD, a more than sufficient margin for LD to deploy itself).
+* We read the text and calculate the TTR at each new word, as well as the change from
+the TTR level just before
+* We keep a window with the last 20 words, and we stop at the point were there has not been any jump of more than 0.05 in the TTR levels. 
+* When we stop, we take the value of TTR as a value that corresponds to a point of stabilization : from this point onwards, the main tendency of TTR is a gradual descent, and we may consider that LD has fully deployed itself in the past fragment.
+
+We hope to obtain in this way a significant value for TTR to work as factor.size, according to the rationale exhibited in Reference 2 above. We also expect this to be a value greater than 0.72, of course, since we have seen that this value is relatively high and produces a MTLD correlated with length for shorter texts (though little correlated for longer texts.)
+
+```{r obtain.stabilization}
+
+find_stabilization <- function(text, tol = 0.05, text_length = 200, window_length = 20) {
+  if (length(text) == 1){
+    text <- str_replace_all(text, ponctuation, "")
+    split_text <- strsplit(text, "\\n| ")[[1]]
+    return(ifelse(length(split_text) == 1, NA,
+                  find_stabilization(split_text, tol, text_length, window_length)))
+  }
+  else {
+    split_text <- str_replace_all(text, ponctuation, "")
+    split_text <- split_text[!(split_text %in% "")]
+  }
+  if (length(split_text)<text_length) {return(NA)}
+  big_jump <- rep(TRUE, window_length)
+  word_count <- 1
+  TTR <- 1
+  while (any(big_jump) & word_count < text_length) {
+    new_TTR <- length(unique(split_text[1:word_count]))/word_count
+    if (abs(TTR-new_TTR) > tol) {big_jump <- c(big_jump[-1], TRUE)}
+    else {big_jump <- c(big_jump[-1], FALSE)}
+    TTR <- new_TTR
+    word_count <- word_count+1
+  }
+  return(ifelse(word_count==text_length, NA, TTR))
+}
+
+stabilization_points <- c()
+for (text in texts) {
+  
+  text <- str_replace_all(text, ponctuation, "")
+  split_text <- strsplit(text, "\\n| ")[[1]]
+  fragments <- split(split_text, ceiling((1:length(split_text))/200)) 
+  stabs <- map_dbl(fragments, find_stabilization)
+  stabilization_points <- c(stabilization_points, mean(stabs, na.rm = T))
+}
+
+stabilization_points2 <- c()
+for (text in texts.not_longest) {
+  
+  text <- str_replace_all(text, ponctuation, "")
+  split_text <- strsplit(text, "\\n| ")[[1]]
+  fragments <- split(split_text, ceiling((1:length(split_text))/200)) 
+  stabs <- map_dbl(fragments, find_stabilization, tol = 0.01)
+  stabilization_points2 <- c(stabilization_points2, mean(stabs, na.rm = T))
+}
+
+stabilization_points3 <- c()
+for (text in texts.not_longest) {
+  
+  text <- str_replace_all(text, ponctuation, "")
+  split_text <- strsplit(text, "\\n| ")[[1]]
+  fragments <- split(split_text, ceiling((1:length(split_text))/200)) 
+  stabs <- map_dbl(fragments, find_stabilization, tol = 0.005, window_length = 20)
+  stabilization_points3 <- c(stabilization_points3, mean(stabs, na.rm = T))
+}
+
+```
+
+This gives a value which should be a better indicator of LD for the texts we have observed, and for literary texts in Spanish in general. Which is the correlation of MTLD, using this parameter, with length?
+
+```{r MTLD.revisited}
+tales_frame$MTLD_0.88 <- tales_frame$MTLD <- names(texts) %>%
+                         map_dbl(function(tale) {print(tale); MTLD(texts[[tale]],0.88)})  
+
+tales_frame$MTLD_0.8 <- tales_frame$MTLD <- names(texts) %>%
+                         map_dbl(function(tale) {print(tale); MTLD(texts[[tale]], 0.8)})  
+tales_frame$MTLD_0.76 <- tales_frame$MTLD <- names(texts) %>%
+                         map_dbl(function(tale) {print(tale); MTLD(texts[[tale]],0.76)})  
+
+print(paste0("Correlación MTLD al número de palabras con parámetro 0.88: ", cor(tales_frame$MTLD_0.88, tales_frame$Palabras)))
+print(paste0("Correlación MTLD al número de palabras con parámetro 0.8: ", cor(tales_frame$MTLD_0.8, tales_frame$Palabras)))
+print(paste0("Correlación MTLD al número de palabras con parámetro 0.76: ", cor(tales_frame$MTLD_0.76, tales_frame$Palabras)))
+print(paste0("Correlación MTLD al número de palabras con parámetro 0.72: ", cor(tales_frame$MTLD, tales_frame$Palabras)))
+
+saveRDS(tales_frame, "Resources/tales_frame_final.rds")
+```
+
+We see that, as with the parameter MTLD before, both metrics exhibit a quite feeble positive correlation with the number of words in the text, and this correlation actually becomes negligeable when we consider long texts. For texts in the middle range of length, from 200 to 1000 words, the correlations are near the range 30-55%, meaning that lexical diversity still tends to grow with length : in any case, the short stories may well exhibit this behaviour to a certain point, since in literary language repetition tends to be avoided (except at very specific passages where it is intended to have an effect), and the lexical richness of classical authors hardly stays short of vocabulary.
+Following the rationale of the choice of the size of factors by the search of a point of stabilization, we will choose 0.76 as parameter : to choose it we said that a fragment has stabilized when TTR does not make jumps greater than 0.005 at each time, with allows for no more than 0.01 variation in the last 20 words, our stabilization window. The actual mean was 0.748, we choose to approximate to 0.76 to favour the creation of factors (see Ref. 2). Hence, this is for us the best parameter, and we can have an answer to the question : which authors are more lexically diverse?
+
+```{r LD.by_author.revisited}
+
+lexical_diversity.by_author.revisited <- tales_frame %>%
+                                         filter(Palabras>100) %>%
+                                         group_by(Autor) %>%
+                                         summarise_at(vars(MTLD_0.76), ~mean(.)) %>%
+                                         arrange(1/MTLD_0.76)
+saveRDS(lexical_diversity.by_author.revisited, "Resources/lexical_diversity.by_author.revisited")
+```
+
+
